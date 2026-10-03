@@ -129,9 +129,19 @@ def read_cfg(path):
 
 
 def needed_from_libs(libdir, modules):
+    """The imports the table must answer, in MODULES order (the load order).
+
+    A module binds an import to another module's export only if that module
+    is already loaded (so_resolve), i.e. listed EARLIER. So an import counts
+    as covered only by an earlier module's export; one that only a LATER
+    module exports needs a shim like any other. (Before, any module's export
+    counted: FMOD Ex, loaded first, imports operator delete and
+    __cxa_pure_virtual, which libDuckTales.so loaded after it exports; they
+    were left out of the table and stayed unbound -- ducktales_nx.)"""
     from elftools.elf.elffile import ELFFile
-    und, exp = {}, set()
+    und, exported_before = {}, set()
     for m in modules:
+        mod_und, mod_exp = {}, set()
         with open(os.path.join(libdir, m), "rb") as f:
             e = ELFFile(f)
             for s in e.get_section_by_name(".dynsym").iter_symbols():
@@ -139,10 +149,14 @@ def needed_from_libs(libdir, modules):
                     continue
                 if s["st_shndx"] == "SHN_UNDEF":
                     weak = s["st_info"]["bind"] == "STB_WEAK"
-                    und[s.name] = und.get(s.name, True) and weak
+                    mod_und[s.name] = mod_und.get(s.name, True) and weak
                 elif s["st_info"]["bind"] != "STB_LOCAL":
-                    exp.add(s.name)
-    return {n: w for n, w in und.items() if n not in exp}
+                    mod_exp.add(s.name)
+        for n, weak in mod_und.items():
+            if n not in exported_before:
+                und[n] = und.get(n, True) and weak
+        exported_before |= mod_exp
+    return und
 
 
 def source_files(port_src, out_path, exclude):
